@@ -1,0 +1,84 @@
+# Build directories
+build/
+cmake-build-*/
+out/
+
+# CMake files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CMakeUserPresets.json
+Makefile
+*.cmake
+!CMakeLists.txt
+!*.cmake.in
+
+# Ninja build
+*.ninja
+.ninja_deps
+.ninja_log
+
+# Compiled objects & libraries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+*.exp
+*.map
+
+# Executable output (if placed in root or /bin)
+msgpass_server
+msgpass_client
+msgpass_server.exe
+msgpass_client.exe
+*.exe
+
+# Debug / release subfolders
+Debug/
+Release/
+MinSizeRel/
+RelWithDebInfo/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.user
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+*.code-workspace
+
+# Windows specific
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+
+# Linux / macOS specific
+.DS_Store
+.directory
+
+# Test outputs (if any)
+test_*.log
+*.out
+
+# Package / distribution
+*.tar.gz
+*.zip
+
+# Misc
+*.pid
+*.lock
