@@ -70,6 +70,7 @@ int main(int argc, char *argv[])
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-s") == 0 && i+1 < argc) {
             strncpy(sock_path, argv[++i], sizeof(sock_path) - 1);
+            sock_path[sizeof(sock_path)-1] = '\0';
         } else if (strcmp(argv[i], "-p") == 0 && i+1 < argc) {
             tcp_port = atoi(argv[++i]);
             use_tcp  = 1;
@@ -148,7 +149,7 @@ int main(int argc, char *argv[])
     uint8_t resp_hdr[MP_RESP_HDR_LEN];
     ssize_t nr = os_recv_all(fd, resp_hdr, sizeof(resp_hdr));
     if (nr != (ssize_t)sizeof(resp_hdr)) {
-        LOG_ERROR("failed to read response header (got %lld)", (long long)nr);
+        LOG_ERROR("failed to read response header (got " MP_FSIZED ")", MP_CAST_SSIZE(nr));
         os_close_socket(fd);
         os_net_cleanup();
         return 1;
@@ -170,7 +171,7 @@ int main(int argc, char *argv[])
     /* Read and print response data */
     int ret = 0;
     if (data_len > 0) {
-        uint8_t *data = malloc(data_len);
+        uint8_t *data = malloc(data_len + 1);
         if (!data) {
             LOG_ERROR("malloc failed");
             os_close_socket(fd);
@@ -180,9 +181,12 @@ int main(int argc, char *argv[])
 
         nr = os_recv_all(fd, data, data_len);
         if (nr != (ssize_t)data_len) {
-            LOG_WARN("short response data: got %lld of %u", (long long)nr, data_len);
+            LOG_WARN("short response data: got " MP_FSIZED " of %u", MP_CAST_SSIZE(nr), data_len);
             ret = 1;
         } else {
+            /* Null-terminate for convenience */
+            data[data_len] = '\0';
+
             char *str = (char *)data;
             size_t len = data_len;
 
