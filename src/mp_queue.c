@@ -1,5 +1,7 @@
 #include "mp_queue.h"
 #include "mp_log.h"
+#include "mp_protocol.h"
+#include "os/os_socket.h"
 
 void mp_queue_init(mp_queue_t *q)
 {
@@ -13,8 +15,13 @@ void mp_queue_drain(mp_queue_t *q)
     mp_socket_t  fd;
     mp_request_t *req;
 
-    while (mp_queue_dequeue(q, &fd, &req))
+    while (mp_queue_dequeue(q, &fd, &req)) {
+        /* Close client socket if still valid to avoid descriptor leaks at shutdown. */
+        if (fd != MP_INVALID_SOCKET) {
+            os_close_socket(fd);
+        }
         proto_request_free(req);
+    }
 }
 
 int mp_queue_enqueue(mp_queue_t *q, mp_socket_t fd, mp_request_t *req)
