@@ -1,13 +1,13 @@
 /*
- * Multi-threaded server. One thread per accepted connection.
- * Each thread does blocking I/O; no shared queue or select() needed.
- * The thread owns its socket and frees it on exit.
+ * Multi-threaded server. One thread per client connection.
+ * Blocking I/O, no shared queue.
  */
 
 #include "mp_common.h"
 #include "mp_protocol.h"
 #include "mp_dispatcher.h"
 #include "mp_log.h"
+#include "mp_portable.h"
 #include "os/os_socket.h"
 #include "os/os_thread.h"
 
@@ -18,10 +18,10 @@ typedef struct {
 static void mt_client_worker(void *arg)
 {
     mt_client_arg_t *ca = (mt_client_arg_t *)arg;
-    mp_socket_t      fd  = ca->fd;
+    mp_socket_t      fd = ca->fd;
     free(ca);
 
-    LOG_INFO("worker thread started for fd=%d", (int)fd);
+    LOG_INFO("worker started for fd=%d", (int)fd);
 
     for (;;) {
         uint8_t hdr_buf[MP_REQ_HDR_LEN];
@@ -32,7 +32,7 @@ static void mt_client_worker(void *arg)
             break;
         }
         if (nr != (ssize_t)sizeof(hdr_buf)) {
-            LOG_WARN("fd=%d short header read (%lld)", (int)fd, nr);
+            LOG_WARN("fd=%d short header (" MP_FSIZED " bytes)", (int)fd, MP_CAST_SSIZE(nr));
             break;
         }
 
@@ -47,7 +47,7 @@ static void mt_client_worker(void *arg)
 
         const char *err = NULL;
         if (proto_validate_header(req_len, req_type, req_arg_len, &err) != 0) {
-            LOG_WARN("fd=%d protocol violation: %s", (int)fd, err ? err : "?");
+            LOG_WARN("fd=%d protocol error: %s", (int)fd, err ? err : "unknown");
             break;
         }
 
@@ -55,14 +55,14 @@ static void mt_client_worker(void *arg)
         if (req_arg_len > 0) {
             arg_buf = malloc((size_t)req_arg_len + 1);
             if (!arg_buf) {
-                LOG_ERROR("malloc arg_buf failed");
+                LOG_ERROR("malloc failed");
                 break;
             }
             arg_buf[req_arg_len] = '\0';
 
             nr = os_recv_all(fd, arg_buf, req_arg_len);
             if (nr != (ssize_t)req_arg_len) {
-                LOG_WARN("fd=%d short arg read (%lld)", (int)fd, nr);
+                LOG_WARN("fd=%d short arg (" MP_FSIZED " bytes)", (int)fd, MP_CAST_SSIZE(nr));
                 free(arg_buf);
                 break;
             }
@@ -81,7 +81,7 @@ static void mt_client_worker(void *arg)
     }
 
     os_close_socket(fd);
-    LOG_INFO("worker thread done for fd=%d", (int)fd);
+    LOG_INFO("worker done for fd=%d", (int)fd);
 }
 
 void mp_server_mt_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
@@ -99,22 +99,22 @@ void mp_server_mt_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
             continue;
         }
 
-        LOG_INFO("accepted connection fd=%d", (int)cfd);
+        LOG_INFO("accepted fd=%d", (int)cfd);
 
         mt_client_arg_t *arg = malloc(sizeof(*arg));
         if (!arg) {
-            LOG_ERROR("malloc failed, dropping connection fd=%d", (int)cfd);
+            LOG_ERROR("malloc failed, dropping fd=%d", (int)cfd);
             os_close_socket(cfd);
             continue;
         }
         arg->fd = cfd;
 
         if (os_thread_spawn_detached(mt_client_worker, arg) != 0) {
-            LOG_ERROR("failed to spawn thread for fd=%d", (int)cfd);
+            LOG_ERROR("thread spawn failed for fd=%d", (int)cfd);
             free(arg);
             os_close_socket(cfd);
         }
     }
 
-    LOG_INFO("multi-threaded server stopped accepting");
+    LOG_INFO("multi-threaded server stopped");
 }

@@ -1,5 +1,6 @@
 #include "mp_client_state.h"
 #include "mp_log.h"
+#include "mp_portable.h"
 
 void cs_init(mp_client_state_t *cs, mp_socket_t fd)
 {
@@ -17,9 +18,14 @@ void cs_free(mp_client_state_t *cs)
 
 void cs_reset(mp_client_state_t *cs)
 {
+    /*
+     * Reset the state machine for the next request on the same connection.
+     * We must preserve the fd — everything else goes back to zero.
+     */
+    mp_socket_t saved_fd = cs->fd;
     free(cs->arg_buf);
     memset(cs, 0, sizeof(*cs));
-    /* fd is preserved — the connection is still open */
+    cs->fd    = saved_fd;
     cs->phase = CS_READ_HEADER;
 }
 
@@ -34,9 +40,25 @@ static int parse_header(mp_client_state_t *cs)
     cs->req_type    = ntohs_uint16(wt);
     cs->req_arg_len = ntohs_uint16(wa);
 
+    LOG_DEBUG("fd=%d raw header bytes: %02x %02x %02x %02x %02x %02x",
+              (int)cs->fd,
+              cs->hdr_buf[0], cs->hdr_buf[1],
+              cs->hdr_buf[2], cs->hdr_buf[3],
+              cs->hdr_buf[4], cs->hdr_buf[5]);
+
+    LOG_DEBUG("fd=%d parsed: req_len=%u req_type=%u req_arg_len=%u",
+              (int)cs->fd,
+              (unsigned)cs->req_len,
+              (unsigned)cs->req_type,
+              (unsigned)cs->req_arg_len);
+
     const char *err = NULL;
     if (proto_validate_header(cs->req_len, cs->req_type, cs->req_arg_len, &err) != 0) {
-        LOG_WARN("fd=%d protocol error: %s", (int)cs->fd, err ? err : "unknown");
+        LOG_WARN("fd=%d protocol error: %s (req_len=%u type=%u arg_len=%u)",
+                 (int)cs->fd, err ? err : "unknown",
+                 (unsigned)cs->req_len,
+                 (unsigned)cs->req_type,
+                 (unsigned)cs->req_arg_len);
         return -1;
     }
     return 0;
@@ -76,7 +98,6 @@ cs_feed_result_t cs_feed(mp_client_state_t *cs)
             cs->arg_buf[cs->req_arg_len] = '\0';
             cs->arg_bytes = 0;
             cs->phase = CS_READ_ARG;
-            /* fall through to CS_READ_ARG on next iteration */
             break;
         }
 
@@ -108,9 +129,6 @@ mp_request_t *cs_take_request(mp_client_state_t *cs)
     mp_request_t *req = proto_request_alloc(cs->req_type,
                                             cs->arg_buf,
                                             cs->req_arg_len);
-    /* Reset for the next request on this connection. */
-    mp_socket_t saved_fd = cs->fd;
     cs_reset(cs);
-    cs->fd = saved_fd;
     return req;
 }

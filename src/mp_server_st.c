@@ -1,16 +1,13 @@
 /*
  * Single-threaded server using select() for I/O multiplexing.
  *
- * The basic loop is:
- *   1. Build fd_set from all tracked client fds + the listening socket.
- *   2. Call select() with a short timeout so we can check the shutdown flag.
- *   3. Accept any new connections.
- *   4. Feed each readable client through its state machine.
- *      When a complete request arrives, push it onto the FIFO queue.
- *   5. Dequeue exactly one request and dispatch it.
+ * On Windows, Winsock's select() works differently from POSIX:
+ * - fd_set is an array of SOCKETs, not a bitmask indexed by fd number
+ * - FD_SETSIZE is the max number of sockets in the set (default 64)
+ * - The nfds parameter to select() is ignored on Windows
  *
- * Step 5 is deliberately one-at-a-time. This keeps the latency predictable
- * and avoids starving the I/O phase when commands take a while to run.
+ * We handle this transparently since we use the FD_SET/FD_ISSET macros
+ * which work correctly on both platforms.
  */
 
 #include "mp_common.h"
@@ -18,13 +15,13 @@
 #include "mp_queue.h"
 #include "mp_dispatcher.h"
 #include "mp_log.h"
+#include "mp_portable.h"
 #include "os/os_socket.h"
 
 #ifndef _WIN32
 #include <sys/select.h>
 #endif
 
-/* A simple linked list of active client connections. */
 typedef struct mp_client_list {
     mp_client_node_t *head;
     int               count;
@@ -34,7 +31,7 @@ static void client_list_add(mp_client_list_t *list, mp_socket_t fd)
 {
     mp_client_node_t *node = calloc(1, sizeof(*node));
     if (!node) {
-        LOG_ERROR("could not allocate client node, closing fd=%d", (int)fd);
+        LOG_ERROR("could not allocate client node, dropping fd=%d", (int)fd);
         os_close_socket(fd);
         return;
     }
@@ -90,6 +87,10 @@ void mp_server_st_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
         FD_ZERO(&rset);
         FD_SET(listen_fd, &rset);
 
+        /*
+         * On POSIX, nfds must be the highest fd + 1.
+         * On Windows, nfds is ignored but we compute it anyway.
+         */
         int max_fd = (int)listen_fd;
 
         for (mp_client_node_t *n = clients.head; n; n = n->next) {
@@ -98,14 +99,17 @@ void mp_server_st_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
                 max_fd = (int)n->state.fd;
         }
 
-        struct timeval tv = { .tv_sec = 0, .tv_usec = 100000 };
+        struct timeval tv;
+        tv.tv_sec  = 0;
+        tv.tv_usec = 100000; /* 100ms */
+
         int sel = select(max_fd + 1, &rset, NULL, NULL, &tv);
 
         if (sel < 0) {
 #ifdef _WIN32
             int e = WSAGetLastError();
             if (e == WSAEINTR) continue;
-            LOG_ERROR("select failed: %d", e);
+            LOG_ERROR("select failed: %d (%s)", e, os_socket_strerror(e));
 #else
             if (errno == EINTR) continue;
             LOG_ERROR("select: %s", strerror(errno));
@@ -113,32 +117,39 @@ void mp_server_st_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
             break;
         }
 
-        /* Accept any waiting connections first. */
-        if (sel > 0 && FD_ISSET(listen_fd, &rset)) {
-            mp_socket_t cfd = os_accept(listen_fd);
-            if (cfd != MP_INVALID_SOCKET) {
-                os_set_nonblocking(cfd);
+        if (sel == 0)
+            continue;
+
+        /* Accept new connections. Drain all pending accepts. */
+        if (FD_ISSET(listen_fd, &rset)) {
+            for (;;) {
+                mp_socket_t cfd = os_accept(listen_fd);
+                if (cfd == MP_INVALID_SOCKET)
+                    break;
+
+                if (os_set_nonblocking(cfd) != 0) {
+                    LOG_ERROR("failed to set non-blocking on fd=%d", (int)cfd);
+                    os_close_socket(cfd);
+                    continue;
+                }
+
                 client_list_add(&clients, cfd);
             }
         }
 
-        /* Feed each readable client through its state machine. */
+        /* Feed each readable client through the state machine. */
         mp_client_node_t *cur = clients.head;
         while (cur) {
             mp_client_node_t *next = cur->next;
             mp_socket_t       cfd  = cur->state.fd;
 
-            /* Only read when select() reported the socket as readable. */
-            if (sel <= 0 || !FD_ISSET(cfd, &rset)) {
+            if (!FD_ISSET(cfd, &rset)) {
                 cur = next;
                 continue;
             }
 
-            /*
-             * Keep feeding until the socket has no more data right now
-             * or until a complete request is available. A single recv()
-             * can return multiple requests' worth of data in theory.
-             */
+            int client_removed = 0;
+
             for (;;) {
                 cs_feed_result_t res = cs_feed(&cur->state);
 
@@ -147,43 +158,54 @@ void mp_server_st_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
                     if (!req) {
                         LOG_ERROR("cs_take_request failed for fd=%d", (int)cfd);
                         client_list_remove(&clients, cfd);
-                        cur = NULL;
+                        client_removed = 1;
                         break;
                     }
-                    LOG_DEBUG("queued request type=%u for fd=%d", req->type, (int)cfd);
-                    if (mp_queue_enqueue(&queue, cfd, req) != 0)
+                    LOG_DEBUG("queued request type=%u for fd=%d",
+                              (unsigned)req->type, (int)cfd);
+                    if (mp_queue_enqueue(&queue, cfd, req) != 0) {
+                        LOG_ERROR("enqueue failed for fd=%d", (int)cfd);
                         proto_request_free(req);
-                    /* Check for more data immediately. */
+                    }
                     continue;
                 }
 
-                if (res == CS_FEED_NEED_MORE) break;
-
-                if (res == CS_FEED_CLOSED || res == CS_FEED_ERROR || res == CS_FEED_PROTO_ERR) {
-                    client_list_remove(&clients, cfd);
-                    cur = NULL;
+                if (res == CS_FEED_NEED_MORE)
                     break;
-                }
+
+                if (res == CS_FEED_CLOSED)
+                    LOG_INFO("client fd=%d disconnected", (int)cfd);
+                else if (res == CS_FEED_PROTO_ERR)
+                    LOG_WARN("protocol error from fd=%d", (int)cfd);
+                else
+                    LOG_WARN("read error from fd=%d", (int)cfd);
+
+                client_list_remove(&clients, cfd);
+                client_removed = 1;
+                break;
             }
 
-            cur = (cur == NULL) ? NULL : next;
+            (void)client_removed;
+            cur = next;
         }
 
-        /* Process exactly one request per loop iteration. */
+        /* Process exactly one queued request per iteration. */
         if (!mp_queue_is_empty(&queue)) {
             mp_socket_t   cfd = MP_INVALID_SOCKET;
             mp_request_t *req = NULL;
 
             if (mp_queue_dequeue(&queue, &cfd, &req)) {
-                LOG_DEBUG("dispatching queued request, queue depth now " MP_FSIZE,
-                          MP_CAST_SIZE(mp_queue_size(&queue)));
+                LOG_DEBUG("dispatching request type=%u to fd=%d (queue=" MP_FSIZE ")",
+                          (unsigned)req->type, (int)cfd, MP_CAST_SIZE(mp_queue_size(&queue)));
                 mp_dispatch(cfd, req);
                 proto_request_free(req);
             }
         }
     }
 
-    LOG_INFO("event loop shutting down");
+    LOG_INFO("event loop shutting down (clients=%d, queue=" MP_FSIZE ")",
+             clients.count, MP_CAST_SIZE(mp_queue_size(&queue)));
     mp_queue_drain(&queue);
     client_list_destroy(&clients);
+    LOG_INFO("event loop exited cleanly");
 }

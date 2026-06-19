@@ -1,5 +1,6 @@
 #include "mp_buf.h"
 #include "mp_log.h"
+#include "mp_portable.h"
 
 #define INITIAL_CAP 4096u
 

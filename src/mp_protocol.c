@@ -1,5 +1,6 @@
 #include "mp_protocol.h"
 #include "mp_log.h"
+#include "mp_portable.h"
 
 #ifdef _WIN32
 #  include <winsock2.h>
@@ -20,8 +21,13 @@ int proto_validate_header(uint16_t    req_len,
         return -1;
     }
 
-    /* uint16_t max is 65535 by definition so upper bound always holds */
-    if (req_arg_len != (uint16_t)(req_len - PROTO_HDR_SIZE)) {
+    /*
+     * This is the critical check. The arg_len field must be exactly
+     * req_len minus the 6-byte header. If this fails, the bytes
+     * were either corrupted, misaligned, or encoded incorrectly.
+     */
+    uint16_t expected_arg_len = (uint16_t)(req_len - PROTO_HDR_SIZE);
+    if (req_arg_len != expected_arg_len) {
         if (err_out) *err_out = "req_arg_len inconsistent with req_len";
         return -1;
     }
@@ -44,30 +50,45 @@ int proto_encode_request(uint16_t    type,
                          uint16_t    arg_len,
                          mp_buf_t   *out)
 {
-    size_t total = (size_t)PROTO_HDR_SIZE + arg_len;
+    if (!out) return -1;
+
+    /*
+     * Wire layout:
+     *   [REQ_LEN:2][REQ_TYPE:2][REQ_ARG_LEN:2][REQ_ARG:arg_len]
+     *
+     * REQ_LEN = 6 + arg_len (total frame length including REQ_LEN itself)
+     */
+    size_t total = (size_t)PROTO_HDR_SIZE + (size_t)arg_len;
     if (total > MP_MAX_FRAME_LEN) {
         LOG_ERROR("request too large: " MP_FSIZE " bytes", MP_CAST_SIZE(total));
         return -1;
     }
 
+    uint16_t wire_total   = htons_uint16((uint16_t)total);
+    uint16_t wire_type    = htons_uint16(type);
+    uint16_t wire_arg_len = htons_uint16(arg_len);
+
+    /*
+     * Write the header as three separate 2-byte fields.
+     * Using memcpy into a local buffer first so we get the exact
+     * byte layout we expect, regardless of struct packing.
+     */
     uint8_t hdr[PROTO_HDR_SIZE];
-    uint16_t wl = htons_uint16((uint16_t)total);
-    uint16_t wt = htons_uint16(type);
-    uint16_t wa = htons_uint16(arg_len);
+    memcpy(hdr + 0, &wire_total,   2);
+    memcpy(hdr + 2, &wire_type,    2);
+    memcpy(hdr + 4, &wire_arg_len, 2);
 
-    /* Write explicit bytes in network order (big-endian) to avoid any
-       memcpy-from-uint16_t ambiguity across platforms/ABIs. */
-    hdr[0] = (uint8_t)((wl >> 8) & 0xFF);
-    hdr[1] = (uint8_t)(wl & 0xFF);
-    hdr[2] = (uint8_t)((wt >> 8) & 0xFF);
-    hdr[3] = (uint8_t)(wt & 0xFF);
-    hdr[4] = (uint8_t)((wa >> 8) & 0xFF);
-    hdr[5] = (uint8_t)(wa & 0xFF);
+    if (mp_buf_append(out, hdr, PROTO_HDR_SIZE) != 0)
+        return -1;
 
-    if (mp_buf_append(out, hdr, PROTO_HDR_SIZE) != 0) return -1;
     if (arg_len > 0 && arg) {
-        if (mp_buf_append(out, arg, arg_len) != 0) return -1;
+        if (mp_buf_append(out, arg, arg_len) != 0)
+            return -1;
     }
+
+    LOG_DEBUG("encoded request: total=%u type=%u arg_len=%u",
+              (unsigned)total, (unsigned)type, (unsigned)arg_len);
+
     return 0;
 }
 
@@ -75,20 +96,22 @@ int proto_encode_response(const char *data,
                           size_t      data_len,
                           mp_buf_t   *out)
 {
+    if (!out) return -1;
+
     if (data_len > PROTO_MAX_RESP_DATA)
         data_len = PROTO_MAX_RESP_DATA;
 
-    size_t total = PROTO_RESP_HDR_SIZE + data_len;
-    uint16_t wl = htons_uint16((uint16_t)total);
+    size_t total = (size_t)PROTO_RESP_HDR_SIZE + data_len;
 
-    uint8_t hdr[PROTO_RESP_HDR_SIZE];
-    hdr[0] = (uint8_t)((wl >> 8) & 0xFF);
-    hdr[1] = (uint8_t)(wl & 0xFF);
+    uint16_t wire_total = htons_uint16((uint16_t)total);
+    if (mp_buf_append(out, &wire_total, 2) != 0)
+        return -1;
 
-    if (mp_buf_append(out, hdr, PROTO_RESP_HDR_SIZE) != 0) return -1;
     if (data_len > 0 && data) {
-        if (mp_buf_append(out, data, data_len) != 0) return -1;
+        if (mp_buf_append(out, data, data_len) != 0)
+            return -1;
     }
+
     return 0;
 }
 

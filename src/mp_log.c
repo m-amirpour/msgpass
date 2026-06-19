@@ -48,36 +48,16 @@ void mp_log_write(mp_log_level_t level,
 
     SYSTEMTIME st;
     GetLocalTime(&st);
-    snprintf(tsbuf, sizeof(tsbuf),
-         "%04u-%02u-%02uT%02u:%02u:%02u.%03u",
-         (unsigned)st.wYear,
-         (unsigned)st.wMonth,
-         (unsigned)st.wDay,
-         (unsigned)st.wHour,
-         (unsigned)st.wMinute,
-         (unsigned)st.wSecond,
-         (unsigned)st.wMilliseconds);
-
-#else
-    struct timespec ts;
-    struct tm       tm_info;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    localtime_r(&ts.tv_sec, &tm_info);
-    strftime(tsbuf, sizeof(tsbuf), "%Y-%m-%dT%H:%M:%S", &tm_info);
-
-    char tsbuf2[40];
-    snprintf(tsbuf2, sizeof(tsbuf2), "%s.%03ld", tsbuf, ts.tv_nsec / 1000000L);
-
-    flockfile(stderr);
-    fprintf(stderr, "%s [%s] %s:%d %s(): ", tsbuf2, level_name(level), file, line, func);
-    va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
-    va_end(ap);
-    fputc('\n', stderr);
-    fflush(stderr);
-    funlockfile(stderr);
-    return;
-#endif
+    /*
+     * SYSTEMTIME fields are WORD (unsigned short, 0-65535).
+     * GCC's format-truncation warning is overly conservative here since
+     * real values never exceed 4 digits for year, 2 for everything else,
+     * and 3 for milliseconds. We use a 64-byte buffer to shut it up.
+     */
+    snprintf(tsbuf, sizeof(tsbuf), "%04u-%02u-%02uT%02u:%02u:%02u.%03u",
+             (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
+             (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond,
+             (unsigned)st.wMilliseconds);
 
     fprintf(stderr, "%s [%s] %s:%d %s(): ", tsbuf, level_name(level), file, line, func);
     va_start(ap, fmt);
@@ -86,7 +66,24 @@ void mp_log_write(mp_log_level_t level,
     fputc('\n', stderr);
     fflush(stderr);
 
-#ifdef _WIN32
     LeaveCriticalSection(&g_log_lock);
+#else
+    struct timespec ts;
+    struct tm       tm_info;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    localtime_r(&ts.tv_sec, &tm_info);
+
+    char ts_base[24];
+    strftime(ts_base, sizeof(ts_base), "%Y-%m-%dT%H:%M:%S", &tm_info);
+    snprintf(tsbuf, sizeof(tsbuf), "%s.%03ld", ts_base, ts.tv_nsec / 1000000L);
+
+    flockfile(stderr);
+    fprintf(stderr, "%s [%s] %s:%d %s(): ", tsbuf, level_name(level), file, line, func);
+    va_start(ap, fmt);
+    vfprintf(stderr, fmt, ap);
+    va_end(ap);
+    fputc('\n', stderr);
+    fflush(stderr);
+    funlockfile(stderr);
 #endif
 }

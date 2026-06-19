@@ -2,6 +2,7 @@
 #include "mp_executor.h"
 #include "mp_buf.h"
 #include "mp_log.h"
+#include "mp_portable.h"
 #include "os/os_socket.h"
 
 int mp_dispatch(mp_socket_t fd, const mp_request_t *req)
@@ -9,17 +10,13 @@ int mp_dispatch(mp_socket_t fd, const mp_request_t *req)
     LOG_INFO("dispatching type=%u arg='%s' fd=%d",
              (unsigned)req->type, req->arg ? req->arg : "", (int)fd);
 
-    mp_exec_result_t result = {0};
+    mp_exec_result_t result;
+    memset(&result, 0, sizeof(result));
+
+    /* mp_executor_run is MP_NODISCARD — capture the return value */
     int exec_rc = mp_executor_run(req, &result);
-
-    if (exec_rc != 0 && result.data == NULL) {
-        LOG_ERROR("executor failed with no output for request");
-        return -1;
-    }
-
-    if (exec_rc != 0 && result.data != NULL) {
-        LOG_WARN("executor failed, but sending captured error output (len=%u)",
-                 (unsigned)result.len);
+    if (exec_rc != 0) {
+        LOG_WARN("command execution failed (rc=%d) for fd=%d", exec_rc, (int)fd);
     }
 
     mp_buf_t resp;
@@ -32,20 +29,16 @@ int mp_dispatch(mp_socket_t fd, const mp_request_t *req)
         goto done;
     }
 
-    uint16_t total_len = (uint16_t)(resp.len + 2);
-    uint16_t wire_len  = htons(total_len);
+    LOG_DEBUG("sending " MP_FSIZE " byte response to fd=%d",
+              MP_CAST_SIZE(resp.len), (int)fd);
 
-    if (os_send_all(fd, &wire_len, sizeof(wire_len)) != sizeof(wire_len)) {
-        LOG_WARN("failed to send response header fd=%d", (int)fd);
-        rc = -1;
-        goto done;
-    }
-
-    if (os_send_all(fd, resp.data, resp.len) != (ssize_t)resp.len) {
+    ssize_t sent = os_send_all(fd, resp.data, resp.len);
+    if (sent != (ssize_t)resp.len) {
         LOG_WARN("send failed for fd=%d", (int)fd);
         rc = -1;
     } else {
-        LOG_INFO("sent %u byte response to fd=%d", total_len, (int)fd);
+        LOG_INFO("sent " MP_FSIZE " byte response to fd=%d",
+                 MP_CAST_SIZE(resp.len), (int)fd);
     }
 
     done:
