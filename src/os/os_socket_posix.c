@@ -1,6 +1,5 @@
 #ifndef _WIN32
 
-#define _DEFAULT_SOURCE
 
 #include "os/os_socket.h"
 #include "mp_log.h"
