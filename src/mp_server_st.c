@@ -189,16 +189,26 @@ void mp_server_st_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
             cur = next;
         }
 
-        /* Process exactly one queued request per iteration. */
-        if (!mp_queue_is_empty(&queue)) {
-            mp_socket_t   cfd = MP_INVALID_SOCKET;
-            mp_request_t *req = NULL;
+        /*
+        * Process queued requests. We drain up to a small batch per
+        * iteration so the server stays responsive to new I/O while
+        * still making progress on the backlog.
+        */
+        {
+            int batch = 0;
+            int max_batch = 8;
 
-            if (mp_queue_dequeue(&queue, &cfd, &req)) {
-                LOG_DEBUG("dispatching request type=%u to fd=%d (queue=" MP_FSIZE ")",
-                          (unsigned)req->type, (int)cfd, MP_CAST_SIZE(mp_queue_size(&queue)));
-                mp_dispatch(cfd, req);
-                proto_request_free(req);
+            while (!mp_queue_is_empty(&queue) && batch < max_batch) {
+                mp_socket_t   cfd = MP_INVALID_SOCKET;
+                mp_request_t *req = NULL;
+
+                if (mp_queue_dequeue(&queue, &cfd, &req)) {
+                    LOG_DEBUG("dispatching request type=%u to fd=%d (queue=" MP_FSIZE ")",
+                              (unsigned)req->type, (int)cfd, MP_CAST_SIZE(mp_queue_size(&queue)));
+                    mp_dispatch(cfd, req);
+                    proto_request_free(req);
+                    batch++;
+                }
             }
         }
     }
