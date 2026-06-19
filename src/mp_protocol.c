@@ -46,7 +46,7 @@ int proto_encode_request(uint16_t    type,
 {
     size_t total = (size_t)PROTO_HDR_SIZE + arg_len;
     if (total > MP_MAX_FRAME_LEN) {
-        LOG_ERROR("request too large: %ju bytes", (uintmax_t)total);
+        LOG_ERROR("request too large: " MP_FSIZE " bytes", MP_CAST_SIZE(total));
         return -1;
     }
 
