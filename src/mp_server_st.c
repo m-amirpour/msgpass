@@ -128,7 +128,8 @@ void mp_server_st_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
             mp_client_node_t *next = cur->next;
             mp_socket_t       cfd  = cur->state.fd;
 
-            if (sel > 0 && !FD_ISSET(cfd, &rset)) {
+            /* Only read when select() reported the socket as readable. */
+            if (sel <= 0 || !FD_ISSET(cfd, &rset)) {
                 cur = next;
                 continue;
             }
@@ -174,8 +175,8 @@ void mp_server_st_run(mp_socket_t listen_fd, mp_shutdown_flag_t *shutdown_flag)
             mp_request_t *req = NULL;
 
             if (mp_queue_dequeue(&queue, &cfd, &req)) {
-                LOG_DEBUG("dispatching queued request, queue depth now %llu",
-                          mp_queue_size(&queue));
+                LOG_DEBUG("dispatching queued request, queue depth now " MP_FSIZE,
+                          MP_CAST_SIZE(mp_queue_size(&queue)));
                 mp_dispatch(cfd, req);
                 proto_request_free(req);
             }
