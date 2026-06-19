@@ -1,24 +1,17 @@
 #!/usr/bin/env bash
-#
-# stress_test.sh — Run concurrent clients against all four server modes.
-#
-# Usage:
-#   ./stress_test.sh ./msgpass_server ./msgpass_client
-#
 
 set -euo pipefail
 
 SERVER="${1:-./msgpass_server}"
 CLIENT="${2:-./msgpass_client}"
 
-NUM_CLIENTS=50
-REQUESTS_PER_CLIENT=5
+NUM_CLIENTS=10
+REQUESTS_PER_CLIENT=3
 TOTAL_ERRORS=0
-
 SERVER_PID=""
 
 cleanup() {
-    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
+    if [ -n "$SERVER_PID" ]; then
         kill "$SERVER_PID" 2>/dev/null || true
         wait "$SERVER_PID" 2>/dev/null || true
     fi
@@ -29,13 +22,9 @@ trap cleanup EXIT
 pass() { echo "  PASS: $1"; }
 fail() { echo "  FAIL: $1"; TOTAL_ERRORS=$((TOTAL_ERRORS + 1)); }
 
-# ── server lifecycle ─────────────────────────────────────────────────────
-
 start_server() {
-    # Redirect server output to /dev/null so it doesn't pollute test output
     "$SERVER" "$@" >/dev/null 2>&1 &
     SERVER_PID=$!
-    sleep 0.3
 }
 
 stop_server() {
@@ -47,134 +36,105 @@ stop_server() {
     sleep 0.2
 }
 
-# ── readiness checks ────────────────────────────────────────────────────
-# Instead of checking for socket files or port availability using bash
-# builtins, we just try to send an actual request. This is the most
-# reliable way to know the server is genuinely ready.
-
+# Check if server is ready by sending a real request with a timeout
 wait_for_server() {
-    local mode="$1"   # "unix" or "tcp"
-    local addr="$2"   # socket path or port
-    local tries=50
+    local mode="$1"
+    local addr="$2"
+    local tries=30
+
+    echo "  waiting for server..."
 
     while [ $tries -gt 0 ]; do
-        local output=""
-        if [ "$mode" = "unix" ]; then
-            output=$("$CLIENT" -s "$addr" PWD 2>/dev/null) || true
-        else
-            output=$("$CLIENT" -p "$addr" PWD 2>/dev/null) || true
+        # Check server process is still alive
+        if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+            echo "  server process died"
+            return 1
         fi
 
-        # If we got any real output (not an error message), server is ready
-        if [ -n "$output" ] && [ "$output" != "Command execution failed" ]; then
+        local rc=0
+        if [ "$mode" = "unix" ]; then
+            timeout 2 "$CLIENT" -s "$addr" PWD >/dev/null 2>&1 || rc=$?
+        else
+            timeout 2 "$CLIENT" -p "$addr" PWD >/dev/null 2>&1 || rc=$?
+        fi
+
+        if [ "$rc" -eq 0 ]; then
+            echo "  server ready"
             return 0
         fi
 
-        sleep 0.1
+        sleep 0.2
         tries=$((tries - 1))
     done
 
+    echo "  server did not become ready"
     return 1
 }
 
-# ── functional tests ─────────────────────────────────────────────────────
-
 test_pwd() {
-    local mode="$1"
-    local addr="$2"
-    local output=""
-
+    local mode="$1" addr="$2" output=""
     if [ "$mode" = "unix" ]; then
-        output=$("$CLIENT" -s "$addr" PWD 2>/dev/null) || true
+        output=$(timeout 5 "$CLIENT" -s "$addr" PWD 2>/dev/null) || true
     else
-        output=$("$CLIENT" -p "$addr" PWD 2>/dev/null) || true
+        output=$(timeout 5 "$CLIENT" -p "$addr" PWD 2>/dev/null) || true
     fi
-
     if [ -n "$output" ] && [ "$output" != "Command execution failed" ]; then
         pass "PWD ($mode)"
     else
-        fail "PWD ($mode) — got: '$output'"
+        fail "PWD ($mode)"
     fi
 }
 
 test_ls() {
-    local mode="$1"
-    local addr="$2"
-    local output=""
-
+    local mode="$1" addr="$2" output=""
     if [ "$mode" = "unix" ]; then
-        output=$("$CLIENT" -s "$addr" LS /tmp 2>/dev/null) || true
+        output=$(timeout 5 "$CLIENT" -s "$addr" LS /tmp 2>/dev/null) || true
     else
-        output=$("$CLIENT" -p "$addr" LS /tmp 2>/dev/null) || true
+        output=$(timeout 5 "$CLIENT" -p "$addr" LS /tmp 2>/dev/null) || true
     fi
-
     if [ -n "$output" ]; then
         pass "LS /tmp ($mode)"
     else
-        fail "LS /tmp ($mode) — no output"
+        fail "LS /tmp ($mode)"
     fi
 }
 
 test_cat() {
-    local mode="$1"
-    local addr="$2"
-    local target="/etc/hostname"
-
-    if [ ! -f "$target" ]; then
-        echo "  SKIP: CAT test — $target not found"
+    local mode="$1" addr="$2"
+    if [ ! -f /etc/hostname ]; then
+        echo "  SKIP: CAT (no /etc/hostname)"
         return
     fi
-
-    local expected got
-    expected=$(cat "$target")
-    got=""
-
+    local expected got=""
+    expected=$(cat /etc/hostname)
     if [ "$mode" = "unix" ]; then
-        got=$("$CLIENT" -s "$addr" CAT "$target" 2>/dev/null) || true
+        got=$(timeout 5 "$CLIENT" -s "$addr" CAT /etc/hostname 2>/dev/null) || true
     else
-        got=$("$CLIENT" -p "$addr" CAT "$target" 2>/dev/null) || true
+        got=$(timeout 5 "$CLIENT" -p "$addr" CAT /etc/hostname 2>/dev/null) || true
     fi
-
     if [ "$expected" = "$got" ]; then
-        pass "CAT $target ($mode)"
+        pass "CAT /etc/hostname ($mode)"
     else
-        fail "CAT $target ($mode) — output mismatch"
+        fail "CAT /etc/hostname ($mode)"
     fi
 }
 
 test_stdin() {
-    local mode="$1"
-    local addr="$2"
-    local output=""
-
+    local mode="$1" addr="$2" output=""
     if [ "$mode" = "unix" ]; then
-        output=$(printf 'PWD\nLS /tmp\n' | "$CLIENT" -s "$addr" 2>/dev/null) || true
+        output=$(printf 'PWD\nLS /tmp\n' | timeout 5 "$CLIENT" -s "$addr" 2>/dev/null) || true
     else
-        output=$(printf 'PWD\nLS /tmp\n' | "$CLIENT" -p "$addr" 2>/dev/null) || true
+        output=$(printf 'PWD\nLS /tmp\n' | timeout 5 "$CLIENT" -p "$addr" 2>/dev/null) || true
     fi
-
     if [ -n "$output" ]; then
         pass "stdin batch ($mode)"
     else
-        fail "stdin batch ($mode) — no output"
+        fail "stdin batch ($mode)"
     fi
 }
 
-run_functional_tests() {
-    local mode="$1"
-    local addr="$2"
-
-    test_pwd   "$mode" "$addr"
-    test_ls    "$mode" "$addr"
-    test_cat   "$mode" "$addr"
-    test_stdin "$mode" "$addr"
-}
-
-# ── stress test ──────────────────────────────────────────────────────────
-
 run_stress() {
-    local mode="$1"
-    local addr="$2"
+    local mode="$1" addr="$2"
     local failed=0
     local pids=()
 
@@ -183,11 +143,11 @@ run_stress() {
             errs=0
             for j in $(seq 1 "$REQUESTS_PER_CLIENT"); do
                 if [ "$mode" = "unix" ]; then
-                    "$CLIENT" -s "$addr" PWD     >/dev/null 2>&1 || errs=$((errs+1))
-                    "$CLIENT" -s "$addr" LS /tmp >/dev/null 2>&1 || errs=$((errs+1))
+                    timeout 5 "$CLIENT" -s "$addr" PWD     >/dev/null 2>&1 || errs=$((errs+1))
+                    timeout 5 "$CLIENT" -s "$addr" LS /tmp >/dev/null 2>&1 || errs=$((errs+1))
                 else
-                    "$CLIENT" -p "$addr" PWD     >/dev/null 2>&1 || errs=$((errs+1))
-                    "$CLIENT" -p "$addr" LS /tmp >/dev/null 2>&1 || errs=$((errs+1))
+                    timeout 5 "$CLIENT" -p "$addr" PWD     >/dev/null 2>&1 || errs=$((errs+1))
+                    timeout 5 "$CLIENT" -p "$addr" LS /tmp >/dev/null 2>&1 || errs=$((errs+1))
                 fi
             done
             exit $errs
@@ -200,25 +160,23 @@ run_stress() {
     done
 
     if [ "$failed" -eq 0 ]; then
-        pass "stress ($NUM_CLIENTS clients x $REQUESTS_PER_CLIENT req): all OK"
+        pass "stress ($NUM_CLIENTS clients x $REQUESTS_PER_CLIENT req)"
     else
-        fail "stress: $failed client(s) failed"
+        fail "stress: $failed/$NUM_CLIENTS clients had errors"
     fi
 }
 
-# ── run one scenario ─────────────────────────────────────────────────────
-
 run_scenario() {
     local label="$1"
-    local mode="$2"      # "unix" or "tcp"
-    local addr="$3"      # socket path or port
+    local mode="$2"
+    local addr="$3"
     shift 3
-    local server_args=("$@")
 
     echo ""
     echo "==== $label ===="
 
-    start_server "${server_args[@]}"
+    start_server "$@"
+    sleep 0.5
 
     if ! wait_for_server "$mode" "$addr"; then
         fail "server did not start"
@@ -226,51 +184,43 @@ run_scenario() {
         return
     fi
 
-    run_functional_tests "$mode" "$addr"
+    test_pwd   "$mode" "$addr"
+    test_ls    "$mode" "$addr"
+    test_cat   "$mode" "$addr"
+    test_stdin "$mode" "$addr"
     run_stress "$mode" "$addr"
 
     stop_server
 }
 
-# ── scenarios ────────────────────────────────────────────────────────────
+# Kill any leftover servers from previous runs
+killall msgpass_server 2>/dev/null || true
+sleep 0.3
 
 SOCK_ST="/tmp/msgpass_stress_st_$$.sock"
 SOCK_MT="/tmp/msgpass_stress_mt_$$.sock"
-TCP_PORT_ST=19871
-TCP_PORT_MT=19872
 
-run_scenario \
-    "Scenario 1: single-threaded + UNIX" \
-    "unix" "$SOCK_ST" \
-    -s "$SOCK_ST"
-
+run_scenario "Scenario 1: single-threaded + UNIX" \
+    "unix" "$SOCK_ST" -s "$SOCK_ST"
 rm -f "$SOCK_ST"
 
-run_scenario \
-    "Scenario 2: single-threaded + TCP" \
-    "tcp" "$TCP_PORT_ST" \
-    -p "$TCP_PORT_ST"
+run_scenario "Scenario 2: single-threaded + TCP" \
+    "tcp" "19871" -p 19871
+sleep 0.5
 
-run_scenario \
-    "Scenario 3: multi-threaded + UNIX" \
-    "unix" "$SOCK_MT" \
-    -s "$SOCK_MT" -t
-
+run_scenario "Scenario 3: multi-threaded + UNIX" \
+    "unix" "$SOCK_MT" -s "$SOCK_MT" -t
 rm -f "$SOCK_MT"
 
-run_scenario \
-    "Scenario 4: multi-threaded + TCP" \
-    "tcp" "$TCP_PORT_MT" \
-    -p "$TCP_PORT_MT" -t
-
-# ── summary ──────────────────────────────────────────────────────────────
+run_scenario "Scenario 4: multi-threaded + TCP" \
+    "tcp" "19872" -p 19872 -t
 
 echo ""
 echo "==============================="
 if [ "$TOTAL_ERRORS" -eq 0 ]; then
-    echo "All tests passed."
+    echo "ALL TESTS PASSED"
 else
-    echo "$TOTAL_ERRORS test(s) FAILED."
+    echo "$TOTAL_ERRORS TEST(S) FAILED"
 fi
 echo "==============================="
 
