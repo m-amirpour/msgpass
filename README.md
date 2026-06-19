@@ -1,6 +1,3 @@
-===== README.md =====
-
-```markdown
 # msgpass — Server-Client Message Passing System
 
 A cross-platform command execution server and client written in C11.
@@ -27,9 +24,7 @@ single-threaded and multi-threaded operation.
 
 ## Architecture
 
-```
 ![Architecture](docs/images/Architecture.png)
-```
 
 ### Single-threaded mode (default)
 
@@ -58,9 +53,7 @@ All integer fields are in **network byte order (big-endian)**.
 
 ### Request (client → server)
 
-```
 ![Request](docs/images/Request.png)
-```
 
 - `REQ_LEN` — total length of the entire request including these 2 bytes
 - `REQ_TYPE` — command identifier (see table below)
@@ -69,9 +62,7 @@ All integer fields are in **network byte order (big-endian)**.
 
 ### Response (server → client)
 
-```
 ![Response](docs/images/Response.png)
-```
 
 - `RESP_LEN` — total length including these 2 bytes
 - `RESP_DATA` — raw stdout output of the executed command
@@ -343,7 +334,7 @@ msgpass/
 ├── Makefile                convenience wrapper (Linux only)
 ├── README.md               this file
 ├── docs/
-│   └── architecture.md     deep-dive: design decisions, queue generics
+│   └── images              requrired images for this readme.md file
 ├── include/
 │   ├── mp_common.h         platform detection, shared types
 │   ├── mp_protocol.h       wire format constants and API
@@ -437,4 +428,3 @@ kill %1
 ```
 
 Expected: `All heap blocks were freed -- no leaks are possible`
-```
