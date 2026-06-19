@@ -41,7 +41,7 @@ int mp_buf_reserve(mp_buf_t *b, size_t extra)
 
     uint8_t *p = realloc(b->data, new_cap);
     if (!p) {
-        LOG_ERROR("realloc(%llu) failed", new_cap);
+        LOG_ERROR("realloc(" MP_FSIZE ") failed", MP_CAST_SIZE(new_cap));
         return -1;
     }
     b->data = p;
