@@ -1,11 +1,11 @@
 #ifndef _WIN32
 
-#define _POSIX_C_SOURCE 200809L
-
 #include "os/os_thread.h"
 #include "mp_log.h"
 
+#include <errno.h>
 #include <pthread.h>
+#include <string.h>
 
 typedef struct {
     os_thread_fn_t fn;
@@ -46,4 +46,4 @@ int os_thread_spawn_detached(os_thread_fn_t fn, void *arg)
     return 0;
 }
 
-#endif /* !_WIN32 */
+#endif

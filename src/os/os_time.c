@@ -9,7 +9,6 @@ int64_t os_monotonic_ms(void)
 
 #else
 
-#define _POSIX_C_SOURCE 200809L
 #include <time.h>
 
 int64_t os_monotonic_ms(void)
