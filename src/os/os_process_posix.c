@@ -1,27 +1,28 @@
 #ifndef _WIN32
 
-#define _POSIX_C_SOURCE 200809L
-#define _DEFAULT_SOURCE
-
 #include "os/os_process.h"
 #include "os/os_time.h"
 #include "mp_buf.h"
 #include "mp_log.h"
 
+#include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdio.h>
+#include <string.h>
 #include <sys/wait.h>
+#include <unistd.h>
 
-static void set_error(char **out_data, size_t *out_len, const char *msg)
+static void set_error(char **out, size_t *len, const char *msg)
 {
-    free(*out_data);
-    *out_data = NULL;
+    free(*out);
+    *out = NULL;
     size_t n = strlen(msg);
     char *p  = malloc(n + 1);
     if (p) memcpy(p, msg, n + 1);
-    *out_data = p;
-    *out_len  = p ? n : 0;
+    *out = p;
+    *len = p ? n : 0;
 }
 
 int os_exec_capture(char *const argv[],
@@ -49,11 +50,6 @@ int os_exec_capture(char *const argv[],
     }
 
     if (pid == 0) {
-        /*
-         * Child process. Redirect stdout to the write end of the pipe
-         * and exec. We use _exit() specifically to avoid flushing any
-         * stdio buffers inherited from the parent.
-         */
         close(pipefd[0]);
         if (dup2(pipefd[1], STDOUT_FILENO) < 0) _exit(126);
         close(pipefd[1]);
@@ -104,15 +100,20 @@ int os_exec_capture(char *const argv[],
                 break;
             }
             if (nr == 0) break;
-            mp_buf_append(&output, rbuf, (size_t)nr);
+            if (mp_buf_append(&output, rbuf, (size_t)nr) != 0) {
+                LOG_ERROR("buf_append failed during read");
+                break;
+            }
         }
 
         if (pfd.revents & (POLLHUP | POLLERR)) {
-            /* Drain any last bytes before we bail. */
             for (;;) {
                 ssize_t nr = read(pipefd[0], rbuf, sizeof(rbuf));
                 if (nr <= 0) break;
-                mp_buf_append(&output, rbuf, (size_t)nr);
+                if (mp_buf_append(&output, rbuf, (size_t)nr) != 0) {
+                    LOG_ERROR("buf_append failed during drain");
+                    break;
+                }
             }
             break;
         }
