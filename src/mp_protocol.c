@@ -46,7 +46,7 @@ int proto_encode_request(uint16_t    type,
 {
     size_t total = (size_t)PROTO_HDR_SIZE + arg_len;
     if (total > MP_MAX_FRAME_LEN) {
-        LOG_ERROR("request too large: %llu bytes", total);
+        LOG_ERROR("request too large: " MP_FSIZE " bytes", MP_CAST_SIZE(total));
         return -1;
     }
 
@@ -54,13 +54,16 @@ int proto_encode_request(uint16_t    type,
     uint16_t wl = htons_uint16((uint16_t)total);
     uint16_t wt = htons_uint16(type);
     uint16_t wa = htons_uint16(arg_len);
-    memcpy(hdr + 0, &wl, 2);
-    memcpy(hdr + 2, &wt, 2);
-    memcpy(hdr + 4, &wa, 2);
+    /* Write network-order bytes explicitly to avoid alignment surprises */
+    hdr[0] = (uint8_t)(wl >> 8);
+    hdr[1] = (uint8_t)(wl & 0xFF);
+    hdr[2] = (uint8_t)(wt >> 8);
+    hdr[3] = (uint8_t)(wt & 0xFF);
+    hdr[4] = (uint8_t)(wa >> 8);
+    hdr[5] = (uint8_t)(wa & 0xFF);
 
     if (mp_buf_append(out, hdr, PROTO_HDR_SIZE) != 0) return -1;
-    if (arg_len > 0 && arg) {
-        if (mp_buf_append(out, arg, arg_len) != 0) return -1;
+   if (arg_len > 0 && arg && mp_buf_append(out, arg, arg_len) != 0) { return -1;
     }
     return 0;
 }
@@ -74,9 +77,12 @@ int proto_encode_response(const char *data,
 
     size_t total = PROTO_RESP_HDR_SIZE + data_len;
     uint16_t wl = htons_uint16((uint16_t)total);
-    if (mp_buf_append(out, &wl, 2) != 0) return -1;
-    if (data_len > 0 && data) {
-        if (mp_buf_append(out, data, data_len) != 0) return -1;
+    uint8_t hdr[PROTO_RESP_HDR_SIZE];
+    hdr[0] = (uint8_t)(wl >> 8);
+    hdr[1] = (uint8_t)(wl & 0xFF);
+    if (mp_buf_append(out, hdr, 2) != 0) return -1;
+    if (data_len > 0 && data && mp_buf_append(out, data, data_len) != 0) {
+        return -1;
     }
     return 0;
 }
