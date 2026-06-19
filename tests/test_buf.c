@@ -31,7 +31,7 @@ TEST(reset_keeps_capacity)
 {
     mp_buf_t b;
     mp_buf_init(&b);
-    mp_buf_append(&b, "some data", 9);
+    ASSERT_EQ(mp_buf_append(&b, "some data", 9), 0);
 
     size_t cap = b.cap;
     mp_buf_reset(&b);
@@ -47,7 +47,7 @@ TEST(detach_transfers_ownership)
 {
     mp_buf_t b;
     mp_buf_init(&b);
-    mp_buf_append(&b, "abc", 3);
+    ASSERT_EQ(mp_buf_append(&b, "abc", 3), 0);
 
     size_t   out_len = 0;
     uint8_t *p       = mp_buf_detach(&b, &out_len);

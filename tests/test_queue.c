@@ -82,7 +82,7 @@ TEST(queue_drain_releases_all)
 
     for (int i = 0; i < 10; i++) {
         mp_request_t *r = make_req(REQUEST_TYPE_CAT, "/etc/passwd");
-        mp_queue_enqueue(&q, (mp_socket_t)i, r);
+        ASSERT_EQ(mp_queue_enqueue(&q, (mp_socket_t)i, r), 0);
     }
 
     ASSERT_EQ(mp_queue_size(&q), (size_t)10);
@@ -100,7 +100,7 @@ TEST(queue_interleaved_ops)
     for (int round = 0; round < 4; round++) {
         for (int i = 0; i < 3; i++) {
             mp_request_t *r = make_req(REQUEST_TYPE_PWD, NULL);
-            mp_queue_enqueue(&q, (mp_socket_t)(round * 3 + i), r);
+            ASSERT_EQ(mp_queue_enqueue(&q, (mp_socket_t)(round * 3 + i), r), 0);
         }
         for (int i = 0; i < 3; i++) {
             mp_socket_t   fd;
