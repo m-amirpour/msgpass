@@ -1,6 +1,5 @@
 #ifndef _WIN32
 
-#define _POSIX_C_SOURCE 200809L
 #define _DEFAULT_SOURCE
 
 #include "os/os_socket.h"
@@ -9,7 +8,6 @@
 #include <netdb.h>
 #include <netinet/tcp.h>
 
-#define LISTEN_BACKLOG 128
 
 int os_net_init(void)    { return 0; }
 void os_net_cleanup(void) {}
